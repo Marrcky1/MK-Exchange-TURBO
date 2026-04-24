@@ -30,6 +30,9 @@ Scriptul adaugă un panou de control cu temă dark/terminal, de unde pot fi ajus
 - oprirea scriptului;
 - vizualizarea logurilor și statisticilor.
 
+- <img width="342" height="549" alt="image" src="https://github.com/user-attachments/assets/ccf88147-acd9-4d6b-bd94-a920235b9c6e" />
+
+
 ## Configurare
 
 Valorile principale pot fi modificate direct din cod sau din panoul scriptului:
