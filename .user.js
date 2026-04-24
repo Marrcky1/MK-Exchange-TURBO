@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Triburile.ro - MK Exchange TURBO
 // @namespace    http://tampermonkey.net/
-// @version      4.0
+// @version      5.0
 // @author       Marrcky
-// @description  Refresh la 2-3s pana apare stoc, cumpara MAX instant, Enter x3
+// @description  Refresh la 2-3s pana apare stoc, cumpara MAX instant
 // @match        https://*.triburile.ro/game.php*
 // @grant        none
 // ==/UserScript==
@@ -13,15 +13,14 @@
 
     // ─── CONFIGURARE ────────────────────────────────────────
     let RESURSE_ACTIVE = { wood: true, stone: true, iron: true };
+    let REFRESH_MIN = 1;
+    let REFRESH_MAX = 2;
+    let MIN_STOC    = 250;
 
-    let REFRESH_MIN = 2;  // secunde
-    let REFRESH_MAX = 3;  // secunde
-    let MIN_STOC = 100;     // minim stoc pentru cumparare
-
-    const ENTER_APASARI       = 3;
-    const DELAY_INTRE_ENTER   = 500;
-    const DELAY_DUPA_BUY_CLICK = 500;
-    const DELAY_POST_BUY      = 250;
+    const ENTER_APASARI        = 2;
+    const DELAY_INTRE_ENTER    = 50;
+    const DELAY_DUPA_BUY_CLICK = 50;
+    const DELAY_POST_BUY       = 50;
     // ────────────────────────────────────────────────────────
 
     const params     = new URLSearchParams(window.location.search);
@@ -66,19 +65,13 @@
     function pornestRefreshLoop() {
         clearTimeout(refreshTimer);
         if (!scriptActiv) return;
-
         const sec = Math.floor(Math.random() * (REFRESH_MAX - REFRESH_MIN + 1)) + REFRESH_MIN;
         log(`Stoc gol — refresh in ${sec}s.`);
         setStare('waiting', `refresh in ${sec}s`);
         pornestCountdown(sec);
-
         refreshTimer = setTimeout(() => {
             if (!scriptActiv) return;
-            if (existaStoc()) {
-                log('Stoc aparut inainte de refresh — cumpar!');
-                declanseaza();
-                return;
-            }
+            if (existaStoc()) { log('Stoc aparut — cumpar!'); declanseaza(); return; }
             refreshCnt++;
             actualizareUI();
             log(`Refresh #${refreshCnt}.`);
@@ -103,24 +96,61 @@
         }, 200);
     }
 
-    // ─── CLICK ───────────────────────────────────────────────
-    function click(el) {
-        el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
-        el.dispatchEvent(new MouseEvent('mouseup',   { bubbles: true, button: 0, buttons: 0 }));
-        el.dispatchEvent(new MouseEvent('click',     { bubbles: true, button: 0 }));
+    // ─── VIZIBILITATE ────────────────────────────────────────
+    function esteVizibil(el) {
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 && r.height === 0) return false;
+        const s = window.getComputedStyle(el);
+        return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
     }
 
-    function apasaEnter() {
-        const ev = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
-        document.dispatchEvent(ev);
-        document.body.dispatchEvent(ev);
-        const da = document.querySelector('button.evt-confirm-btn.btn-confirm-yes, .confirmation-box button');
-        if (da) click(da);
+    // ─── CLICK ROBUST (fix focus) ────────────────────────────
+    function click(el) {
+        if (!el) return;
+        el.scrollIntoView({ block: 'center', inline: 'center' });
+        try { el.focus(); } catch(e) {}
+        ['mouseover','mousemove','mousedown','mouseup','click'].forEach(type => {
+            el.dispatchEvent(new MouseEvent(type, {
+                bubbles: true, cancelable: true,
+                view: window, button: 0,
+                buttons: type === 'mousedown' ? 1 : 0
+            }));
+        });
+    }
+
+    // ─── CONFIRMARE DIRECTA (fix focus secundar) ─────────────
+    // Nu se bazeaza pe Enter ci cauta butonul direct in DOM
+    function apasaConfirmareDirecta() {
+        const selectori = [
+            'button.evt-confirm-btn.btn-confirm-yes',
+            '.confirmation-box button.btn-confirm-yes',
+            '.confirmation-box .evt-confirm-btn',
+            '#fader button.evt-confirm-btn',
+            '#fader button.btn-confirm-yes',
+            '#fader .btn-confirm-yes',
+            '.premium-exchange-dialog button'
+        ];
+        for (const sel of selectori) {
+            const btn = [...document.querySelectorAll(sel)].find(esteVizibil);
+            if (btn && !btn.disabled) { click(btn); return true; }
+        }
+        return false;
     }
 
     async function bombardeazaEnter(de = ENTER_APASARI) {
         for (let i = 0; i < de; i++) {
-            apasaEnter();
+            // Incearca mai intai confirmare directa prin DOM
+            const ok = apasaConfirmareDirecta();
+            if (!ok) {
+                // Fallback: KeyboardEvent (mai putin sigur fara focus)
+                const ev = new KeyboardEvent('keydown', {
+                    key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+                    bubbles: true, cancelable: true
+                });
+                document.dispatchEvent(ev);
+                document.body.dispatchEvent(ev);
+            }
             await delay(DELAY_INTRE_ENTER);
         }
     }
@@ -150,15 +180,6 @@
         });
     }
 
-    // ─── VIZIBILITATE ────────────────────────────────────────
-    function esteVizibil(el) {
-        if (!el) return false;
-        const r = el.getBoundingClientRect();
-        if (r.width === 0 && r.height === 0) return false;
-        const s = window.getComputedStyle(el);
-        return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
-    }
-
     function areEroareStoc() {
         const texte = ['nu are suficient', 'schimbul nu are', 'insufficient'];
         for (const el of document.querySelectorAll('.confirmation-box, #fader, .premium-exchange-dialog')) {
@@ -182,10 +203,8 @@
                 if (fader) return { tip: 'fader', el: fader };
                 return null;
             }
-
             const imediat = gaseste();
             if (imediat) { res(imediat); return; }
-
             const obs = new MutationObserver(() => {
                 const g = gaseste();
                 if (g) { obs.disconnect(); res(g); }
@@ -215,12 +234,10 @@
         if (!buton) { log(`${resursa}: buton indisponibil.`); return false; }
 
         click(buton);
-
         await delay(DELAY_DUPA_BUY_CLICK);
         await bombardeazaEnter();
 
         const fereastra = await asteaptaFereastra(3000);
-
         if (fereastra) {
             if (fereastra.tip === 'eroare') {
                 log(`${resursa}: eroare stoc — refresh.`);
@@ -230,7 +247,7 @@
             }
             if (fereastra.el) click(fereastra.el);
             await bombardeazaEnter();
-            log(`${resursa}: confirmat dublu!`);
+            log(`${resursa}: confirmat!`);
         } else {
             log(`${resursa}: confirmat (pre-enter).`);
         }
@@ -238,14 +255,12 @@
         buyCnt++;
         actualizareUI();
         afiseazaNotificare(resursa, stoc);
-
         return true;
     }
 
     // ─── CICLU PRINCIPAL ─────────────────────────────────────
     async function ruleazaCiclu() {
         if (!scriptActiv) return;
-
         const captcha = document.querySelector('.bot-check, .captcha, [class*="captcha"], [id*="captcha"]');
         if (captcha && captcha.offsetParent !== null) {
             log('CAPTCHA! Script oprit.');
@@ -253,20 +268,13 @@
             actualizeazaStatus();
             return;
         }
-
-        if (!existaStoc()) {
-            pornestRefreshLoop();
-            return;
-        }
-
+        if (!existaStoc()) { pornestRefreshLoop(); return; }
         anuleazaRefresh();
         setStare('buying', 'cumparare activa...');
-
         const resurse = getResurseActive()
             .map(r => ({ r, stoc: citesteStoc(r) }))
             .filter(x => x.stoc >= MIN_STOC)
             .sort((a, b) => b.stoc - a.stoc);
-
         for (const { r } of resurse) {
             if (!scriptActiv) break;
             const ok = await cumpara(r);
@@ -274,15 +282,9 @@
             await delay(DELAY_POST_BUY);
             await asteaptaButon(2000);
         }
-
         log('Ciclu complet.');
-
-        if (existaStoc()) {
-            await delay(150);
-            await ruleazaCiclu();
-        } else {
-            pornestRefreshLoop();
-        }
+        if (existaStoc()) { await delay(150); await ruleazaCiclu(); }
+        else pornestRefreshLoop();
     }
 
     async function declanseaza() {
@@ -292,20 +294,18 @@
         ocupat = false;
     }
 
-    // ─── OBSERVER INSTANT ────────────────────────────────────
+    // ─── OBSERVER ────────────────────────────────────────────
     function pornestObserver() {
         getResurseActive().forEach(r => {
             const el = document.getElementById(`premium_exchange_stock_${r}`);
             if (!el) return;
             new MutationObserver(async () => {
-                if (!scriptActiv || ocupat) return;
-                if (citesteStoc(r) < MIN_STOC) return;
+                if (!scriptActiv || ocupat || citesteStoc(r) < MIN_STOC) return;
                 log(`Stoc nou: ${r} = ${citesteStoc(r)} — cumpar instant!`);
                 anuleazaRefresh();
                 await declanseaza();
             }).observe(el, { childList: true, subtree: true, characterData: true });
         });
-
         setInterval(async () => {
             if (!scriptActiv || ocupat || !existaStoc()) return;
             anuleazaRefresh();
@@ -313,18 +313,31 @@
         }, 800);
     }
 
-    // ─── NOTIFICARI ──────────────────────────────────────────
+    // ─── FOCUS TRACKER (fix monitor secundar) ────────────────
+    window.addEventListener('blur', () => {
+        log('Fereastra fara focus — confirmare prin DOM activa.');
+        setStare('waiting', 'fara focus / monitor 2');
+    });
+    window.addEventListener('focus', () => {
+        log('Fereastra are focus din nou.');
+        if (scriptActiv && !ocupat) declanseaza();
+    });
+
+    // ─── NOTIFICARI (stil medieval) ──────────────────────────
     function afiseazaNotificare(r, cant) {
         const nume = { wood: 'Lemn', stone: 'Argila', iron: 'Fier' };
         const n = document.createElement('div');
-        n.style.cssText = `position:fixed;bottom:24px;right:24px;z-index:9999999;
-            background:#030d03;border-left:2px solid #22c55e;border:1px solid #14532d;
-            padding:8px 14px;font-family:'Courier New',monospace;font-size:11px;
-            color:#4ade80;letter-spacing:1px;border-radius:3px;
+        n.style.cssText = `
+            position:fixed;bottom:80px;right:16px;z-index:9999999;
+            background:linear-gradient(135deg,#f9eecc,#eedfa0);
+            border:1px solid #9a7a2a;border-left:3px solid #8a5a10;
+            padding:8px 14px;font-family:Arial,sans-serif;font-size:12px;
+            color:#3a2800;border-radius:6px;
+            box-shadow:0 3px 12px rgba(0,0,0,0.3);
             transition:opacity 0.4s;opacity:1;pointer-events:none;`;
-        n.textContent = `> BUY: ${nume[r]} x${cant}`;
+        n.textContent = `✓ Cumparat: ${nume[r]} × ${cant}`;
         document.body.appendChild(n);
-        setTimeout(() => { n.style.opacity = '0'; setTimeout(() => n.remove(), 400); }, 2500);
+        setTimeout(() => { n.style.opacity='0'; setTimeout(() => n.remove(), 400); }, 2500);
     }
 
     // ─── UI HELPERS ───────────────────────────────────────────
@@ -332,13 +345,13 @@
         const bar = document.getElementById('t-state-bar');
         const txt = document.getElementById('t-state-txt');
         const cd  = document.getElementById('t-countdown');
-        if (bar) bar.className = tip === 'waiting' ? 't-status-bar waiting' : 't-status-bar';
-        if (txt) txt.textContent = `> ${msg}`;
+        if (bar) bar.className = 'tk-status-bar' + (tip === 'waiting' ? ' waiting' : '');
+        if (txt) txt.textContent = msg;
         if (cd && tip !== 'waiting') cd.textContent = '';
     }
 
     function actualizareUI() {
-        ['mk-buy-cnt', 'mk-buy-footer'].forEach(id => {
+        ['mk-buy-cnt','mk-buy-footer'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.textContent = buyCnt;
         });
@@ -349,17 +362,15 @@
     function actualizeazaStatus() {
         const dot = document.getElementById('t-dot');
         const txt = document.getElementById('t-status-txt');
-        const btn = document.getElementById('mkt-btn');
-        if (dot) { dot.style.background = scriptActiv ? '#22c55e' : '#ef4444'; dot.style.animation = scriptActiv ? '' : 'none'; }
+        if (dot) dot.classList.toggle('off', !scriptActiv);
         if (txt) txt.textContent = scriptActiv ? 'ACTIV' : 'OPRIT';
-        if (btn) { btn.textContent = scriptActiv ? '[TURBO]' : '[OPRIT]'; btn.style.color = scriptActiv ? '#22c55e' : '#f87171'; btn.style.borderColor = scriptActiv ? '#166534' : '#7f1d1d'; }
     }
 
-    function togglePanou(s) {
-        const o = document.getElementById('mkt-overlay');
-        if (!o) return;
-        const open = s !== undefined ? s : !o.classList.contains('open');
-        o.classList.toggle('open', open);
+    function togglePanou() {
+        const p = document.getElementById('tk-panel');
+        if (!p) return;
+        const open = p.style.display === 'none' || !p.style.display;
+        p.style.display = open ? 'block' : 'none';
     }
 
     function actualizareLog() {
@@ -369,154 +380,185 @@
             const d = new Date(l.time - sesiuneStart);
             const t = `${String(Math.floor(d/60000)).padStart(2,'0')}:${String(Math.floor((d%60000)/1000)).padStart(2,'0')}`;
             const c = l.msg.includes('cumpar') || l.msg.includes('confirmat') ? 'ok'
-                    : l.msg.includes('refresh') || l.msg.includes('Refresh') || l.msg.includes('gol') || l.msg.includes('Enter') ? 'warn'
+                    : l.msg.includes('refresh') || l.msg.includes('Refresh') || l.msg.includes('gol') || l.msg.includes('focus') ? 'warn'
                     : l.msg.includes('OPRIT') || l.msg.includes('CAPTCHA') || l.msg.includes('eroare') ? 'err' : '';
-            return `<div class="t-log-entry"><span class="t-log-time">${t}</span><span class="t-log-msg ${c}">${l.msg}</span></div>`;
+            return `<div class="tk-log-entry"><span class="tk-log-time">${t}</span><span class="tk-log-msg ${c}">${l.msg}</span></div>`;
         }).join('');
         box.scrollTop = box.scrollHeight;
     }
 
-    // ─── PANOU ───────────────────────────────────────────────
+    // ─── CSS MEDIEVAL ────────────────────────────────────────
+    const CSS = `
+    #tk-float{position:fixed!important;bottom:10px!important;left:10px!important;z-index:2147483646!important;
+        background:linear-gradient(90deg,#8a5a10,#c4922a);border:none;border-radius:8px;
+        color:#fff;font-family:Arial,sans-serif;font-size:13px;font-weight:bold;
+        padding:8px 14px;cursor:pointer;box-shadow:0 3px 12px rgba(0,0,0,.4);
+        text-shadow:0 1px 2px rgba(0,0,0,.4);}
+    #tk-float:hover{filter:brightness(1.1);}
+
+    #tk-panel{position:fixed!important;bottom:60px!important;left:10px!important;z-index:2147483647!important;
+        width:300px;background:linear-gradient(160deg,#f9eecc,#eedfa0);
+        border:2px solid #9a7a2a;border-radius:10px;
+        box-shadow:0 6px 24px rgba(0,0,0,.45);font-family:Arial,sans-serif;
+        font-size:13px;color:#3a2800;display:none;}
+
+    #tk-header{background:linear-gradient(90deg,#8a5a10,#c4922a);border-radius:8px 8px 0 0;
+        padding:9px 12px;display:flex;justify-content:space-between;align-items:center;cursor:move;}
+    #tk-header-title{font-weight:bold;font-size:14px;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.5);}
+    #tk-header-right{display:flex;align-items:center;gap:8px;}
+    .tk-dot{width:7px;height:7px;border-radius:50%;background:#7fff7f;
+        animation:tk-pulse 1.4s infinite;flex-shrink:0;}
+    .tk-dot.off{background:#ff7f7f;animation:none;}
+    @keyframes tk-pulse{0%,100%{opacity:1}50%{opacity:.3}}
+    #t-status-txt{font-size:11px;color:rgba(255,255,255,.85);}
+    #tk-close{background:rgba(0,0,0,.25);border:none;color:#fff;width:22px;height:22px;
+        border-radius:50%;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;}
+
+    #tk-body{padding:10px 12px 10px;display:flex;flex-direction:column;gap:8px;}
+
+    .tk-sect{font-size:10px;font-weight:bold;color:#7a5a10;text-transform:uppercase;
+        letter-spacing:.05em;margin-bottom:5px;border-bottom:1px solid #c8a84e;padding-bottom:2px;}
+
+    .tk-stat-row{display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;}
+    .tk-stat-lbl{color:#7a5a10;}
+    .tk-stat-val{font-weight:bold;color:#3a2800;}
+
+    .tk-res-row{display:flex;gap:10px;margin-bottom:2px;}
+    .tk-rc{display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;}
+    .tk-rc input{display:none;}
+    .tk-rb{width:14px;height:14px;border:1px solid #c8a84e;border-radius:3px;
+        background:#fdf6e0;display:flex;align-items:center;justify-content:center;
+        font-size:9px;color:transparent;transition:.15s;}
+    .tk-rc input:checked ~ .tk-rb{background:#c8a84e;color:#3a2800;border-color:#9a7a2a;}
+    .tk-rl{color:#5a3a00;transition:.15s;}
+    .tk-rc input:checked ~ .tk-rl{color:#3a2800;font-weight:bold;}
+
+    .tk-sl-row{display:flex;align-items:center;gap:8px;margin-bottom:4px;}
+    .tk-sl-lbl{font-size:11px;color:#7a5a10;width:85px;flex-shrink:0;}
+    .tk-sl-val{font-size:11px;font-weight:bold;color:#3a2800;width:36px;text-align:right;flex-shrink:0;}
+    .tk-range{flex:1;-webkit-appearance:none;height:3px;background:#c8a84e;border-radius:2px;outline:none;cursor:pointer;}
+    .tk-range::-webkit-slider-thumb{-webkit-appearance:none;width:11px;height:11px;border-radius:50%;
+        background:linear-gradient(135deg,#c4922a,#8a5a10);cursor:pointer;border:1px solid #6a3a00;}
+
+    .tk-status-bar{padding:6px 10px;background:rgba(139,94,30,.12);
+        border-left:3px solid #c4922a;border-radius:0 4px 4px 0;
+        font-size:11px;color:#5a3a00;display:flex;align-items:center;justify-content:space-between;}
+    .tk-status-bar.waiting{border-left-color:#c4922a;color:#7a5a10;}
+
+    .tk-cmd-row{display:flex;gap:5px;}
+    .tk-cmd{flex:1;padding:7px 0;border-radius:6px;font-family:Arial,sans-serif;
+        font-size:11px;font-weight:bold;cursor:pointer;border:1px solid;transition:.18s;}
+    .tk-cmd:active{transform:scale(.97);}
+    .tk-cmd.run{background:linear-gradient(90deg,#1a6b10,#2ea822);color:#fff;border-color:#145010;}
+    .tk-cmd.run:hover{filter:brightness(1.1);}
+    .tk-cmd.stop{background:linear-gradient(90deg,#8a1010,#c43020);color:#fff;border-color:#6a0808;}
+    .tk-cmd.stop:hover{filter:brightness(1.1);}
+
+    .tk-log-box{background:rgba(139,94,30,.08);border:1px solid #c8a84e;border-radius:6px;
+        padding:7px 9px;height:90px;overflow-y:auto;font-size:10px;
+        display:flex;flex-direction:column;gap:2px;}
+    .tk-log-entry{display:flex;gap:6px;}
+    .tk-log-time{color:#b8983a;min-width:38px;flex-shrink:0;font-size:9px;}
+    .tk-log-msg{color:#5a3a00;word-break:break-all;line-height:1.4;}
+    .tk-log-msg.ok{color:#1a6b10;font-weight:bold;}
+    .tk-log-msg.warn{color:#8a6a00;}
+    .tk-log-msg.err{color:#8a1010;font-weight:bold;}
+
+    #tk-footer{display:flex;justify-content:space-between;padding:5px 12px;
+        border-top:1px solid #c8a84e;font-size:10px;color:#9a7a2a;}
+    `;
+
+    // ─── BUILD PANOU ─────────────────────────────────────────
     function creeazaPanou() {
-        const s = document.createElement('style');
-        s.textContent = `
-            #mkt-btn{position:fixed;bottom:20px;left:20px;z-index:999999;background:#030d03;border:1px solid #166534;color:#22c55e;font-family:'Courier New',monospace;font-size:10px;letter-spacing:2px;padding:6px 12px;cursor:pointer;border-radius:2px;transition:.2s;user-select:none}
-            #mkt-btn:hover{background:#031a03;border-color:#22c55e}
-            #mkt-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;z-index:999998;opacity:0;pointer-events:none;transition:opacity 0.2s}
-            #mkt-overlay.open{opacity:1;pointer-events:all}
-            #mkt-panel{background:#050505;border:1px solid #1a1a1a;border-radius:4px;width:340px;max-width:95vw;font-family:'Courier New',monospace;color:#e2e8f0;position:relative;overflow:hidden;transform:translateY(12px) scale(0.97);transition:transform 0.2s}
-            #mkt-overlay.open #mkt-panel{transform:translateY(0) scale(1)}
-            #mkt-panel::before{content:'';position:absolute;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,255,0,0.012) 2px,rgba(0,255,0,0.012) 4px);pointer-events:none;z-index:0}
-            .t-hdr{background:#030303;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #1a1a1a;position:relative;z-index:1}
-            .t-title{font-size:10px;color:#22c55e;letter-spacing:3px}
-            .t-pill{display:flex;align-items:center;gap:5px;font-size:8px;color:#4ade80;letter-spacing:1px}
-            .t-dot{width:5px;height:5px;border-radius:50%;background:#22c55e;animation:t-blink 0.8s infinite}
-            @keyframes t-blink{0%,100%{opacity:1}50%{opacity:0.1}}
-            .t-close{background:none;border:none;color:#2a2a2a;cursor:pointer;font-size:14px;font-family:'Courier New',monospace;transition:color .15s}
-            .t-close:hover{color:#ef4444}
-            .t-body{padding:12px 14px;position:relative;z-index:1;display:flex;flex-direction:column;gap:10px}
-            .t-sep{border:none;border-top:1px solid #111;margin:0}
-            .t-sect{font-size:8px;color:#222;letter-spacing:2px;margin-bottom:6px}
-            .t-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
-            .t-lbl{font-size:9px;color:#1c3a1c;letter-spacing:1px}
-            .t-val{font-size:10px;color:#4ade80}
-            .t-res-row{display:flex;gap:14px}
-            .t-rc{display:flex;align-items:center;gap:5px;cursor:pointer}
-            .t-rc input{display:none}
-            .t-rb{width:13px;height:13px;border:1px solid #1f1f1f;border-radius:1px;display:flex;align-items:center;justify-content:font-size:8px;color:transparent;transition:.15s;background:#0a0a0a}
-            .t-rc input:checked ~ .t-rb{color:#4ade80;background:#031a03;border-color:#166534}
-            .t-rl{font-size:10px;color:#2a2a2a;letter-spacing:1px;transition:.15s}
-            .t-rc input:checked ~ .t-rl{color:#4ade80}
-            .t-sl-row{display:flex;align-items:center;gap:8px;margin-bottom:5px}
-            .t-sl-lbl{font-size:9px;color:#1c3a1c;letter-spacing:1px;width:85px;flex-shrink:0}
-            .t-sl-val{font-size:10px;color:#22c55e;width:36px;text-align:right;flex-shrink:0}
-            .t-range{flex:1;-webkit-appearance:none;height:2px;background:#141414;outline:none;cursor:pointer}
-            .t-range::-webkit-slider-thumb{-webkit-appearance:none;width:9px;height:9px;border-radius:50%;background:#22c55e;cursor:pointer}
-            .t-status-bar{padding:5px 9px;background:#030d03;border-left:2px solid #22c55e;font-size:9px;color:#4ade80;display:flex;align-items:center;justify-content:space-between}
-            .t-status-bar.waiting{border-left-color:#f59e0b;color:#f59e0b}
-            .t-cmd-row{display:flex;gap:5px}
-            .t-cmd{flex:1;padding:7px 0;background:#0a0a0a;border:1px solid #1a1a1a;font-family:'Courier New',monospace;font-size:9px;letter-spacing:1px;cursor:pointer;border-radius:2px;transition:.18s;font-weight:700}
-            .t-cmd.run{color:#4ade80;border-color:#14532d}
-            .t-cmd.run:hover{background:#031a03;border-color:#22c55e;color:#86efac}
-            .t-cmd.stop{color:#f87171;border-color:#7f1d1d}
-            .t-cmd.stop:hover{background:#1a0505;border-color:#ef4444;color:#fca5a5}
-            .t-cmd:active{transform:scale(0.97)}
-            .t-log{background:#030303;border:1px solid #111;border-radius:2px;padding:7px 9px;height:100px;overflow-y:auto;font-size:9px;display:flex;flex-direction:column;gap:2px}
-            .t-log-entry{display:flex;gap:7px}
-            .t-log-time{color:#1a1a1a;min-width:42px;flex-shrink:0}
-            .t-log-msg{color:#2a2a2a;word-break:break-all}
-            .t-log-msg.ok{color:#22c55e}
-            .t-log-msg.warn{color:#f59e0b}
-            .t-log-msg.err{color:#ef4444}
-            .t-footer{display:flex;justify-content:space-between;padding:5px 14px;border-top:1px solid #111;position:relative;z-index:1}
-            .t-ft{font-size:8px;color:#1a1a1a;letter-spacing:1px}
-            .t-ft-accent{color:#22c55e}
-        `;
-        document.head.appendChild(s);
+        const style = document.createElement('style');
+        style.textContent = CSS;
+        document.head.appendChild(style);
 
-        const btn = document.createElement('button');
-        btn.id = 'mkt-btn';
-        btn.textContent = '[TURBO]';
-        btn.onclick = () => togglePanou();
-        document.body.appendChild(btn);
+        // Buton flotant
+        const floatBtn = document.createElement('button');
+        floatBtn.id = 'tk-float';
+        floatBtn.textContent = '⚡ Turbo';
+        floatBtn.addEventListener('click', togglePanou);
+        document.body.appendChild(floatBtn);
 
-        const overlay = document.createElement('div');
-        overlay.id = 'mkt-overlay';
-        overlay.innerHTML = `
-            <div id="mkt-panel">
-                <div class="t-hdr">
-                    <span class="t-title">[ MK_TURBO ]</span>
-                    <div style="display:flex;align-items:center;gap:8px">
-                        <div class="t-pill"><div class="t-dot" id="t-dot"></div><span id="t-status-txt">ACTIV</span></div>
-                        <span style="font-size:8px;color:#333;background:#0a0a0a;border:1px solid #1a1a1a;border-radius:2px;padding:1px 5px;letter-spacing:1px">CTRL+M</span>
-                        <button class="t-close" id="t-close">[X]</button>
-                    </div>
-                </div>
-                <div class="t-body">
-                    <div style="display:flex;justify-content:space-between;font-size:9px;color:#2a2a2a;letter-spacing:1px">
-                        <span>> uptime: <span style="color:#22c55e" id="t-up">0s</span></span>
-                        <span id="t-clock" style="color:#1a1a1a">--:--:--</span>
-                    </div>
-                    <hr class="t-sep">
-                    <div>
-                        <div class="t-sect">// STATISTICI</div>
-                        <div class="t-row"><span class="t-lbl">CUMPARARI</span><span class="t-val" id="mk-buy-cnt">0</span></div>
-                        <div class="t-row"><span class="t-lbl">REFRESH-URI</span><span class="t-val" id="t-ref-cnt">0</span></div>
-                    </div>
-                    <hr class="t-sep">
-                    <div>
-                        <div class="t-sect">// RESURSE ACTIVE</div>
-                        <div class="t-res-row">
-                            <label class="t-rc"><input type="checkbox" id="tr-wood" checked><div class="t-rb">✓</div><span class="t-rl">LEMN</span></label>
-                            <label class="t-rc"><input type="checkbox" id="tr-stone" checked><div class="t-rb">✓</div><span class="t-rl">ARGILA</span></label>
-                            <label class="t-rc"><input type="checkbox" id="tr-iron" checked><div class="t-rb">✓</div><span class="t-rl">FIER</span></label>
-                        </div>
-                    </div>
-                    <hr class="t-sep">
-                    <div>
-                        <div class="t-sect">// PARAMETRI REFRESH</div>
-                        <div class="t-sl-row">
-                            <span class="t-sl-lbl">REFRESH_MIN</span>
-                            <input type="range" class="t-range" min="1" max="30" value="2" step="1" id="t-sl-rmin">
-                            <span class="t-sl-val" id="t-sl-rmin-val">2s</span>
-                        </div>
-                        <div class="t-sl-row">
-                            <span class="t-sl-lbl">REFRESH_MAX</span>
-                            <input type="range" class="t-range" min="2" max="60" value="3" step="1" id="t-sl-rmax">
-                            <span class="t-sl-val" id="t-sl-rmax-val">3s</span>
-                        </div>
-                        <div class="t-sl-row">
-                            <span class="t-sl-lbl">MIN_STOC</span>
-                            <input type="range" class="t-range" min="1" max="5000" value="1" step="1" id="t-sl-minstoc">
-                            <span class="t-sl-val" id="t-sl-minstoc-val">1</span>
-                        </div>
-                    </div>
-                    <hr class="t-sep">
-                    <div class="t-status-bar" id="t-state-bar">
-                        <span id="t-state-txt">> initializare...</span>
-                        <span id="t-countdown" style="font-size:8px;opacity:0.7"></span>
-                    </div>
-                    <div class="t-cmd-row">
-                        <button class="t-cmd run" id="t-btn-run">[RUN NOW]</button>
-                        <button class="t-cmd stop" id="t-btn-stop">[STOP]</button>
-                    </div>
-                    <div>
-                        <div class="t-sect">// LOG</div>
-                        <div class="t-log" id="t-log-box"></div>
-                    </div>
-                </div>
-                <div class="t-footer">
-                    <span class="t-ft">by <span class="t-ft-accent">Marrcky</span> _ turbo v4.0</span>
-                    <span class="t-ft">buy: <span class="t-ft-accent" id="mk-buy-footer">0</span></span>
+        // Panou
+        const panel = document.createElement('div');
+        panel.id = 'tk-panel';
+        panel.innerHTML = `
+            <div id="tk-header">
+                <span id="tk-header-title">⚡ MK Turbo Exchange</span>
+                <div id="tk-header-right">
+                    <div class="tk-dot" id="t-dot"></div>
+                    <span id="t-status-txt">ACTIV</span>
+                    <button id="tk-close">✕</button>
                 </div>
             </div>
+            <div id="tk-body">
+
+                <div>
+                    <div class="tk-sect">Statistici</div>
+                    <div class="tk-stat-row"><span class="tk-stat-lbl">Cumparari</span><span class="tk-stat-val" id="mk-buy-cnt">0</span></div>
+                    <div class="tk-stat-row"><span class="tk-stat-lbl">Refresh-uri</span><span class="tk-stat-val" id="t-ref-cnt">0</span></div>
+                    <div class="tk-stat-row"><span class="tk-stat-lbl">Uptime</span><span class="tk-stat-val" id="t-up">0s</span></div>
+                </div>
+
+                <div>
+                    <div class="tk-sect">Resurse active</div>
+                    <div class="tk-res-row">
+                        <label class="tk-rc"><input type="checkbox" id="tr-wood" checked><div class="tk-rb">✓</div><span class="tk-rl">Lemn</span></label>
+                        <label class="tk-rc"><input type="checkbox" id="tr-stone" checked><div class="tk-rb">✓</div><span class="tk-rl">Argila</span></label>
+                        <label class="tk-rc"><input type="checkbox" id="tr-iron" checked><div class="tk-rb">✓</div><span class="tk-rl">Fier</span></label>
+                    </div>
+                </div>
+
+                <div>
+                    <div class="tk-sect">Parametri refresh</div>
+                    <div class="tk-sl-row">
+                        <span class="tk-sl-lbl">Refresh min</span>
+                        <input type="range" class="tk-range" min="1" max="30" value="2" step="1" id="t-sl-rmin">
+                        <span class="tk-sl-val" id="t-sl-rmin-val">2s</span>
+                    </div>
+                    <div class="tk-sl-row">
+                        <span class="tk-sl-lbl">Refresh max</span>
+                        <input type="range" class="tk-range" min="2" max="60" value="3" step="1" id="t-sl-rmax">
+                        <span class="tk-sl-val" id="t-sl-rmax-val">3s</span>
+                    </div>
+                    <div class="tk-sl-row">
+                        <span class="tk-sl-lbl">Stoc minim</span>
+                        <input type="range" class="tk-range" min="1" max="5000" value="250" step="1" id="t-sl-minstoc">
+                        <span class="tk-sl-val" id="t-sl-minstoc-val">250</span>
+                    </div>
+                </div>
+
+                <div class="tk-status-bar" id="t-state-bar">
+                    <span id="t-state-txt">Initializare...</span>
+                    <span id="t-countdown" style="font-size:10px;opacity:.7"></span>
+                </div>
+
+                <div class="tk-cmd-row">
+                    <button class="tk-cmd run" id="t-btn-run">▶ Run acum</button>
+                    <button class="tk-cmd stop" id="t-btn-stop">■ Stop</button>
+                </div>
+
+                <div>
+                    <div class="tk-sect">Log activitate</div>
+                    <div class="tk-log-box" id="t-log-box"></div>
+                </div>
+
+            </div>
+            <div id="tk-footer">
+                <span>by <b>Marrcky</b> · turbo v5.0</span>
+                <span>buy: <b id="mk-buy-footer">0</b></span>
+            </div>
         `;
-        document.body.appendChild(overlay);
+        document.body.appendChild(panel);
 
-        document.getElementById('t-close').onclick = () => togglePanou(false);
-        overlay.addEventListener('click', e => { if (e.target === overlay) togglePanou(false); });
+        // Drag
+        makeDraggable(panel, document.getElementById('tk-header'));
 
-        ['wood', 'stone', 'iron'].forEach(r => {
+        document.getElementById('tk-close').addEventListener('click', togglePanou);
+
+        ['wood','stone','iron'].forEach(r => {
             document.getElementById(`tr-${r}`).addEventListener('change', e => {
                 RESURSE_ACTIVE[r] = e.target.checked;
                 log(`${r}: ${e.target.checked ? 'activa' : 'dezactivata'}.`);
@@ -527,37 +569,55 @@
             REFRESH_MIN = parseInt(e.target.value);
             document.getElementById('t-sl-rmin-val').textContent = e.target.value + 's';
         });
-
         document.getElementById('t-sl-rmax').addEventListener('input', e => {
             REFRESH_MAX = parseInt(e.target.value);
             document.getElementById('t-sl-rmax-val').textContent = e.target.value + 's';
         });
-
         document.getElementById('t-sl-minstoc').addEventListener('input', e => {
             MIN_STOC = parseInt(e.target.value);
             document.getElementById('t-sl-minstoc-val').textContent = e.target.value;
         });
 
-        document.getElementById('t-btn-run').onclick = async () => {
+        document.getElementById('t-btn-run').addEventListener('click', async () => {
             if (!scriptActiv) { log('Script oprit.'); return; }
             log('Run manual.');
             await declanseaza();
-        };
+        });
 
-        document.getElementById('t-btn-stop').onclick = () => {
+        document.getElementById('t-btn-stop').addEventListener('click', () => {
             scriptActiv = false;
             anuleazaRefresh();
             actualizeazaStatus();
             log('Script OPRIT.');
-        };
+        });
 
         setInterval(() => {
             const sec = Math.floor((Date.now() - sesiuneStart) / 1000);
             const up = document.getElementById('t-up');
-            if (up) up.textContent = sec < 60 ? sec + 's' : Math.floor(sec/60) + 'm' + String(sec%60).padStart(2,'0') + 's';
+            if (up) up.textContent = sec < 60 ? sec+'s' : Math.floor(sec/60)+'m'+String(sec%60).padStart(2,'0')+'s';
             const cl = document.getElementById('t-clock');
             if (cl) cl.textContent = new Date().toTimeString().slice(0,8);
+            const bf = document.getElementById('mk-buy-footer');
+            if (bf) bf.textContent = buyCnt;
         }, 1000);
+    }
+
+    function makeDraggable(el, handle) {
+        let ox=0,oy=0,mx=0,my=0;
+        handle.addEventListener('mousedown', function(e) {
+            e.preventDefault(); mx=e.clientX; my=e.clientY;
+            document.addEventListener('mousemove', onDrag);
+            document.addEventListener('mouseup', onStop);
+        });
+        function onDrag(e) {
+            ox=mx-e.clientX; oy=my-e.clientY; mx=e.clientX; my=e.clientY;
+            el.style.bottom='auto'; el.style.top=(el.offsetTop-oy)+'px';
+            el.style.left=(el.offsetLeft-ox)+'px';
+        }
+        function onStop() {
+            document.removeEventListener('mousemove',onDrag);
+            document.removeEventListener('mouseup',onStop);
+        }
     }
 
     document.addEventListener('keydown', e => {
@@ -567,23 +627,16 @@
     // ─── PORNIRE ─────────────────────────────────────────────
     window.addEventListener('load', async () => {
         creeazaPanou();
-
         if (!peExchange) {
             log('Redirectez pe Exchange...');
             await delayR(200, 400);
             window.location.href = `game.php?village=${village}&screen=market&mode=exchange`;
             return;
         }
-
         await delayR(150, 300);
-        log('MK_TURBO v4.0 pornit. Ctrl+M = panou.');
-
-        if (existaStoc()) {
-            await declanseaza();
-        } else {
-            pornestRefreshLoop();
-        }
-
+        log('MK_TURBO v5.0 pornit. Ctrl+M = panou.');
+        if (existaStoc()) { await declanseaza(); }
+        else { pornestRefreshLoop(); }
         pornestObserver();
     });
 
